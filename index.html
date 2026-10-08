@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7f3fb">
+  <meta name="description" content="Material 3 Expressive 风格的离线本地音乐播放器。音乐仅保存在你的设备浏览器中。">
+  <title>旋律 · Material 3 Expressive</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <div class="statusbar" aria-label="状态栏">
+      <span class="status-brand">♪ <span>旋律 MELODY</span></span>
+      <div class="status-right"><span id="clock">09:41</span><span class="signal" aria-hidden="true">▂▅▇</span><span aria-hidden="true">◉</span><span class="battery"><i></i></span></div>
+    </div>
+
+    <header class="topbar">
+      <button class="mobile-menu icon-button" id="menuButton" aria-label="打开菜单" title="打开菜单">☰</button>
+      <div class="brand-lockup"><div class="brand-mark">♫</div><div><div class="brand-title">旋律</div><div class="brand-subtitle">LOCAL MUSIC <span>·</span> MATERIAL 3 EXPRESSIVE</div></div></div>
+      <div class="topbar-actions">
+        <label class="search-box" id="searchBox"><span class="search-symbol">⌕</span><input id="searchInput" type="search" placeholder="搜索歌曲、歌手、专辑" autocomplete="off"><button id="clearSearch" class="clear-search" aria-label="清除搜索">×</button></label>
+        <button class="icon-button search-toggle" id="searchToggle" aria-label="搜索" title="搜索">⌕</button>
+        <button class="import-button" id="importButton"><span class="import-plus">＋</span><span>导入音乐</span></button>
+      </div>
+      <input id="fileInput" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.aiff,.wma" multiple hidden>
+      <input id="folderInput" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.aiff,.wma" webkitdirectory directory multiple hidden>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-caption">你的音乐空间</div>
+        <nav class="side-nav" aria-label="音乐库导航">
+          <button class="nav-item active" data-page="home"><span class="nav-icon">⌂</span><span>音乐首页</span><span class="nav-end">›</span></button>
+          <button class="nav-item" data-page="songs"><span class="nav-icon">♫</span><span>全部歌曲</span><span class="nav-count" id="songCountNav">0</span></button>
+          <button class="nav-item" data-page="albums"><span class="nav-icon">▣</span><span>专辑</span><span class="nav-count" id="albumCountNav">0</span></button>
+          <button class="nav-item" data-page="artists"><span class="nav-icon">♟</span><span>歌手</span><span class="nav-count" id="artistCountNav">0</span></button>
+          <button class="nav-item" data-page="folders"><span class="nav-icon">▰</span><span>文件夹</span></button>
+          <button class="nav-item" data-page="favorites"><span class="nav-icon">♥</span><span>我的最爱</span><span class="nav-count" id="favoriteCountNav">0</span></button>
+          <button class="nav-item" data-page="recent"><span class="nav-icon">◷</span><span>最近播放</span></button>
+        </nav>
+        <div class="sidebar-bottom"><div class="sidebar-rule"></div><div class="storage-card"><span class="storage-disc">♫</span><div><b>音乐只在你的设备</b><small>离线 · 私密 · 无账号</small></div></div><button class="side-import" id="sideImportButton">＋ 添加本地歌曲</button></div>
+      </aside>
+
+      <main class="main-content" id="mainContent" tabindex="-1">
+        <div class="mobile-page-tabs" aria-label="快速导航">
+          <button class="mobile-tab active" data-page="home">首页</button><button class="mobile-tab" data-page="songs">歌曲</button><button class="mobile-tab" data-page="albums">专辑</button><button class="mobile-tab" data-page="favorites">最爱</button>
+        </div>
+        <div id="pageContent"></div>
+      </main>
+
+      <aside class="player-panel" id="playerPanel">
+        <div class="panel-head"><span>正在播放</span><button id="timerButton" class="timer-button" title="睡眠定时">◷ <span>睡眠定时</span></button></div>
+        <div class="panel-cover-wrap" id="panelCoverWrap"><div id="panelCover" class="cover-art cover-large empty-record"><div class="record-label">♫</div></div><div class="cover-reflection"></div></div>
+        <div class="panel-track-info"><div class="panel-title" id="panelTitle">还没有播放歌曲</div><div class="panel-artist" id="panelArtist">导入音乐，开启你的播放时刻</div></div>
+        <div class="panel-progress"><span id="panelCurrent">00:00</span><input id="panelSeek" type="range" min="0" max="1000" value="0" aria-label="播放进度"><span id="panelDuration">00:00</span></div>
+        <div class="player-controls">
+          <button class="control-small" id="shuffleButton" aria-label="随机播放" title="随机播放">⤨</button>
+          <button class="control-small" id="prevButton" aria-label="上一首" title="上一首">|◀</button>
+          <button class="play-button" id="playButton" aria-label="播放">▶</button>
+          <button class="control-small" id="nextButton" aria-label="下一首" title="下一首">▶|</button>
+          <button class="control-small" id="repeatButton" aria-label="循环模式" title="顺序播放">↻</button>
+        </div>
+        <div class="panel-foot"><button id="favoriteButton" class="favorite-button" aria-label="加入最爱">♡ <span>最爱</span></button><button id="queueButton" class="queue-button">≡ <span>播放队列</span></button></div>
+        <div class="panel-queue" id="panelQueue" hidden></div>
+        <div class="panel-equalizer"><span>♪</span><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><span>♫</span></div>
+      </aside>
+    </div>
+
+    <nav class="mobile-bottom-nav" aria-label="底部导航">
+      <button class="mobile-bottom-item active" data-page="home"><span>⌂</span><small>首页</small></button>
+      <button class="mobile-bottom-item" data-page="songs"><span>♫</span><small>歌曲</small></button>
+      <button class="mobile-bottom-item" data-page="albums"><span>▣</span><small>专辑</small></button>
+      <button class="mobile-bottom-item" data-page="favorites"><span>♡</span><small>最爱</small></button>
+    </nav>
+
+    <div class="mini-player" id="miniPlayer" hidden>
+      <button class="mini-cover-button" id="miniCoverButton" aria-label="打开正在播放"><div id="miniCover" class="cover-art cover-mini"></div></button>
+      <button class="mini-track" id="miniTrackButton"><strong id="miniTitle">—</strong><span id="miniArtist">—</span></button>
+      <div class="mini-controls"><button id="miniPrev" aria-label="上一首">|◀</button><button id="miniPlay" aria-label="播放">▶</button><button id="miniNext" aria-label="下一首">▶|</button></div>
+      <div class="mini-progress" id="miniProgress"></div>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <div class="modal-backdrop" id="modalBackdrop" hidden><section class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><button class="modal-close" id="modalClose" aria-label="关闭">×</button><div id="modalBody"></div></section></div>
+    <audio id="audio" preload="metadata"></audio>
+  </div>
+  <script src="./app.js" defer></script>
+</body>
+</html>

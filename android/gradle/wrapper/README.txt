@@ -1,0 +1,1 @@
+Official Gradle Wrapper scripts and wrapper JAR are included. The distribution is pinned to Gradle 8.13 in gradle-wrapper.properties. Android SDK Platform 36 is required for the configured app module.

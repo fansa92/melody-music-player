@@ -1,0 +1,16 @@
+{
+  "id": "./",
+  "name": "旋律 · 本地音乐播放器",
+  "short_name": "旋律",
+  "description": "Material 3 Expressive 风格的离线本地音乐播放器",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f8f6fc",
+  "theme_color": "#f8f6fc",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
