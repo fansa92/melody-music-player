@@ -149,6 +149,7 @@ class MainActivity : ComponentActivity() {
                     playbackRevision = playbackRevision.intValue,
                     onImport = { audioPicker.launch(arrayOf("audio/*")) },
                     onPlayTrack = ::playTrack,
+                    onPlayAlbum = ::playAlbum,
                     onToggleFavorite = ::toggleFavorite,
                     onOpenPlayer = { playbackRevision.intValue++ }
                 )
@@ -260,6 +261,14 @@ class MainActivity : ComponentActivity() {
         player.play()
     }
 
+    private fun playAlbum(tracks: List<MusicTrack>, startIndex: Int) {
+        val player = controllerState.value ?: return
+        if (tracks.isEmpty()) return
+        player.setMediaItems(tracks.map(::toMediaItem), startIndex.coerceIn(tracks.indices), 0L)
+        player.prepare()
+        player.play()
+    }
+
     private fun toggleFavorite(track: MusicTrack) {
         val key = track.uri.toString()
         favoriteKeys.value = if (key in favoriteKeys.value) favoriteKeys.value - key else favoriteKeys.value + key
@@ -286,15 +295,18 @@ private fun MelodyApp(
     playbackRevision: Int,
     onImport: () -> Unit,
     onPlayTrack: (MusicTrack) -> Unit,
+    onPlayAlbum: (List<MusicTrack>, Int) -> Unit,
     onToggleFavorite: (MusicTrack) -> Unit,
     onOpenPlayer: () -> Unit
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(LibraryTab.Home) }
+    var selectedAlbumName by rememberSaveable { mutableStateOf<String?>(null) }
     var expandedPlayer by rememberSaveable { mutableStateOf(false) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     val currentUri = player?.currentMediaItem?.localConfiguration?.uri
     val currentTrack = tracks.firstOrNull { it.uri == currentUri }
+    val selectedAlbumTracks = selectedAlbumName?.let { name -> tracks.filter { it.album == name } }.orEmpty()
     val visibleTracks = tracks.filter { track ->
         (query.isBlank() || "${track.title} ${track.artist} ${track.album}".contains(query, true))
     }
@@ -308,16 +320,20 @@ private fun MelodyApp(
             TopAppBar(
                 title = {
                     Column {
-                        Text(if (expandedPlayer) "正在播放" else "旋律", fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.4).sp)
-                        Text(if (expandedPlayer) "你的此刻，由音乐陪伴" else "你的本地音乐空间", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (expandedPlayer) "正在播放" else if (selectedAlbumName != null) "专辑详情" else "旋律", fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.4).sp)
+                        Text(if (expandedPlayer) "你的此刻，由音乐陪伴" else if (selectedAlbumName != null) "专辑与曲目" else "你的本地音乐空间", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
                 navigationIcon = {
-                    if (expandedPlayer) IconButton(onClick = { expandedPlayer = false }) { Icon(Icons.Default.ArrowBack, contentDescription = "返回") }
+                    if (expandedPlayer || selectedAlbumName != null) IconButton(onClick = {
+                        if (expandedPlayer) expandedPlayer = false else selectedAlbumName = null
+                    }) { Icon(Icons.Default.ArrowBack, contentDescription = "返回") }
                 },
                 actions = {
-                    IconButton(onClick = { searchOpen = !searchOpen; if (!searchOpen) query = "" }) {
-                        Icon(Icons.Default.Search, contentDescription = "搜索音乐")
+                    if (!expandedPlayer && selectedAlbumName == null) {
+                        IconButton(onClick = { searchOpen = !searchOpen; if (!searchOpen) query = "" }) {
+                            Icon(Icons.Default.Search, contentDescription = "搜索音乐")
+                        }
                     }
                     FilledTonalIconButton(onClick = onImport, modifier = Modifier.padding(end = 12.dp)) {
                         Icon(Icons.Default.LibraryMusic, contentDescription = "导入音乐")
@@ -333,7 +349,7 @@ private fun MelodyApp(
                         if (player?.isPlaying == true) player.pause() else player?.play()
                     }, onOpen = { expandedPlayer = true; onOpenPlayer() })
                 }
-                if (!expandedPlayer) {
+                if (!expandedPlayer && selectedAlbumName == null) {
                     NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                         LibraryTab.entries.forEach { tab ->
                             NavigationBarItem(
@@ -357,6 +373,17 @@ private fun MelodyApp(
                 modifier = Modifier.padding(innerPadding),
                 onFavorite = { onToggleFavorite(currentTrack) }
             )
+        } else if (selectedAlbumName != null && selectedAlbumTracks.isNotEmpty()) {
+            AlbumDetails(
+                album = selectedAlbumName!!,
+                tracks = selectedAlbumTracks,
+                currentUri = currentUri,
+                player = player,
+                favorites = favorites,
+                modifier = Modifier.padding(innerPadding),
+                onPlayAlbum = onPlayAlbum,
+                onToggleFavorite = onToggleFavorite
+            )
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(innerPadding),
@@ -372,13 +399,20 @@ private fun MelodyApp(
                     item { SectionTitle("最近加入", "${tracks.size} 首") }
                     if (tracks.isEmpty()) item { EmptyLibrary(onImport) }
                     items(tracks.take(8), key = { it.uri.toString() }) { track ->
-                        TrackRow(track, isPlaying = currentUri == track.uri && player?.isPlaying == true, isFavorite = trackKey(track) in favorites, onFavorite = { onToggleFavorite(track) }, onClick = { onPlayTrack(track) })
+                        TrackRow(
+                            track = track,
+                            isPlaying = currentUri == track.uri && player?.isPlaying == true,
+                            isFavorite = trackKey(track) in favorites,
+                            onFavorite = { onToggleFavorite(track) },
+                            onTogglePlayback = { if (currentUri == track.uri && player?.isPlaying == true) player.pause() else onPlayTrack(track) },
+                            onClick = { onPlayTrack(track) }
+                        )
                     }
                 } else if (selectedTab == LibraryTab.Albums) {
                     item { SectionTitle("专辑", "${tracks.map { it.album }.distinct().size} 张") }
                     val grouped = tracks.groupBy { it.album }
                     items(grouped.entries.toList(), key = { it.key }) { (album, albumTracks) ->
-                        AlbumRow(album, albumTracks.firstOrNull(), albumTracks.size, onClick = { selectedTab = LibraryTab.Songs; query = album })
+                        AlbumRow(album, albumTracks, onClick = { selectedAlbumName = album })
                     }
                     if (tracks.isEmpty()) item { EmptyLibrary(onImport) }
                 } else {
@@ -386,7 +420,14 @@ private fun MelodyApp(
                     if (selectedTab == LibraryTab.Favorites && tracksForView.isEmpty()) item { EmptyLibrary(onImport, "收藏几首喜欢的歌", "在播放时点亮爱心，这里就会成为你的私人歌单。") }
                     else if (tracksForView.isEmpty()) item { EmptyLibrary(onImport) }
                     items(tracksForView, key = { it.uri.toString() }) { track ->
-                        TrackRow(track, isPlaying = currentUri == track.uri && player?.isPlaying == true, isFavorite = trackKey(track) in favorites, onFavorite = { onToggleFavorite(track) }, onClick = { onPlayTrack(track) })
+                        TrackRow(
+                            track = track,
+                            isPlaying = currentUri == track.uri && player?.isPlaying == true,
+                            isFavorite = trackKey(track) in favorites,
+                            onFavorite = { onToggleFavorite(track) },
+                            onTogglePlayback = { if (currentUri == track.uri && player?.isPlaying == true) player.pause() else onPlayTrack(track) },
+                            onClick = { onPlayTrack(track) }
+                        )
                     }
                 }
             }
@@ -517,7 +558,7 @@ private fun EmptyLibrary(onImport: () -> Unit, title: String = "你的音乐库�
 }
 
 @Composable
-private fun TrackRow(track: MusicTrack, isPlaying: Boolean, isFavorite: Boolean, onFavorite: () -> Unit, onClick: () -> Unit) {
+private fun TrackRow(track: MusicTrack, isPlaying: Boolean, isFavorite: Boolean, onFavorite: () -> Unit, onTogglePlayback: () -> Unit, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().animateContentSize().clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp, 20.dp, 20.dp, 7.dp),
@@ -532,23 +573,97 @@ private fun TrackRow(track: MusicTrack, isPlaying: Boolean, isFavorite: Boolean,
             }
             Text(formatDuration(track.durationMs), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             IconButton(onClick = onFavorite) { Icon(if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = if (isFavorite) "取消收藏" else "加入收藏", tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
-            IconButton(onClick = onClick) { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "播放 ${track.title}") }
+            IconButton(onClick = onTogglePlayback) { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (isPlaying) "暂停 ${track.title}" else "播放 ${track.title}") }
         }
     }
 }
 
 @Composable
-private fun AlbumRow(album: String, track: MusicTrack?, count: Int, onClick: () -> Unit) {
-    if (track == null) return
+private fun AlbumRow(album: String, tracks: List<MusicTrack>, onClick: () -> Unit) {
+    val track = tracks.firstOrNull { !it.artwork.isNullOrEmpty() } ?: tracks.firstOrNull() ?: return
+    val artists = tracks.map { it.artist }.distinct().joinToString("、")
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick), shape = RoundedCornerShape(20.dp, 20.dp, 20.dp, 7.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Artwork(track, Modifier.size(56.dp))
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
                 Text(album, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${track.artist} · $count 首歌曲", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(artists, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${tracks.size} 首歌曲", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
             }
             Icon(Icons.Default.MoreVert, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun AlbumDetails(
+    album: String,
+    tracks: List<MusicTrack>,
+    currentUri: Uri?,
+    player: Player?,
+    favorites: Set<String>,
+    modifier: Modifier = Modifier,
+    onPlayAlbum: (List<MusicTrack>, Int) -> Unit,
+    onToggleFavorite: (MusicTrack) -> Unit
+) {
+    val coverTrack = tracks.firstOrNull { !it.artwork.isNullOrEmpty() } ?: tracks.first()
+    val artists = tracks.map { it.artist }.distinct().joinToString("、")
+    val isCurrentAlbum = tracks.any { it.uri == currentUri }
+    val isPlaying = isCurrentAlbum && player?.isPlaying == true
+    val totalDuration = tracks.sumOf { it.durationMs }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(28.dp, 28.dp, 10.dp, 28.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Artwork(coverTrack, Modifier.size(220.dp))
+                    Text(album, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(artists, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${tracks.size} 首歌曲 · ${formatDuration(totalDuration)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    androidx.compose.material3.Button(
+                        onClick = {
+                            if (isCurrentAlbum) {
+                                if (isPlaying) player?.pause() else player?.play()
+                            } else {
+                                onPlayAlbum(tracks, 0)
+                            }
+                        },
+                        shape = RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp)
+                    ) {
+                        Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (isPlaying) "暂停" else if (isCurrentAlbum) "继续播放" else "播放专辑")
+                    }
+                }
+            }
+        }
+        item { SectionTitle("专辑曲目", "${tracks.size} 首") }
+        items(tracks, key = { it.uri.toString() }) { track ->
+            val trackIsPlaying = currentUri == track.uri && player?.isPlaying == true
+            TrackRow(
+                track = track,
+                isPlaying = trackIsPlaying,
+                isFavorite = trackKey(track) in favorites,
+                onFavorite = { onToggleFavorite(track) },
+                onTogglePlayback = {
+                    if (trackIsPlaying) player?.pause()
+                    else onPlayAlbum(tracks, tracks.indexOfFirst { it.uri == track.uri }.coerceAtLeast(0))
+                },
+                onClick = { onPlayAlbum(tracks, tracks.indexOfFirst { it.uri == track.uri }.coerceAtLeast(0)) }
+            )
         }
     }
 }
@@ -579,7 +694,7 @@ private fun MiniPlayer(track: MusicTrack, player: Player?, revision: Int, onTogg
                 Text(track.artist, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = .72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             IconButton(onClick = { player?.seekToPreviousMediaItem() }) { Icon(Icons.Default.SkipPrevious, contentDescription = "上一首", tint = MaterialTheme.colorScheme.inverseOnSurface) }
-            FilledTonalIconButton(onClick = onToggle) { Icon(if (player?.isPlaying == true) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "播放") }
+            FilledTonalIconButton(onClick = onToggle) { Icon(if (player?.isPlaying == true) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (player?.isPlaying == true) "暂停" else "播放") }
             IconButton(onClick = { player?.seekToNextMediaItem() }) { Icon(Icons.Default.SkipNext, contentDescription = "下一首", tint = MaterialTheme.colorScheme.inverseOnSurface) }
         }
     }
@@ -611,7 +726,7 @@ private fun FullPlayer(track: MusicTrack, player: Player?, revision: Int, modifi
             IconButton(onClick = { player?.shuffleModeEnabled = !(player?.shuffleModeEnabled ?: false) }) { Icon(Icons.Default.Shuffle, contentDescription = "随机播放") }
             IconButton(onClick = { player?.seekToPreviousMediaItem() }) { Icon(Icons.Default.SkipPrevious, contentDescription = "上一首", modifier = Modifier.size(34.dp)) }
             FilledIconButton(onClick = { if (player?.isPlaying == true) player.pause() else player?.play() }, modifier = Modifier.size(66.dp)) {
-                Icon(if (player?.isPlaying == true) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "播放", modifier = Modifier.size(35.dp))
+                Icon(if (player?.isPlaying == true) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (player?.isPlaying == true) "暂停" else "播放", modifier = Modifier.size(35.dp))
             }
             IconButton(onClick = { player?.seekToNextMediaItem() }) { Icon(Icons.Default.SkipNext, contentDescription = "下一首", modifier = Modifier.size(34.dp)) }
             IconButton(onClick = {
