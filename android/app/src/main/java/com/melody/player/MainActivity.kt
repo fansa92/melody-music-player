@@ -580,7 +580,7 @@ private fun TrackRow(track: MusicTrack, isPlaying: Boolean, isFavorite: Boolean,
 
 @Composable
 private fun AlbumRow(album: String, tracks: List<MusicTrack>, onClick: () -> Unit) {
-    val track = tracks.firstOrNull { !it.artwork.isNullOrEmpty() } ?: tracks.firstOrNull() ?: return
+    val track = tracks.firstOrNull { it.artwork?.isNotEmpty() == true } ?: tracks.firstOrNull() ?: return
     val artists = tracks.map { it.artist }.distinct().joinToString("、")
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick), shape = RoundedCornerShape(20.dp, 20.dp, 20.dp, 7.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -607,7 +607,7 @@ private fun AlbumDetails(
     onPlayAlbum: (List<MusicTrack>, Int) -> Unit,
     onToggleFavorite: (MusicTrack) -> Unit
 ) {
-    val coverTrack = tracks.firstOrNull { !it.artwork.isNullOrEmpty() } ?: tracks.first()
+    val coverTrack = tracks.firstOrNull { it.artwork?.isNotEmpty() == true } ?: tracks.first()
     val artists = tracks.map { it.artist }.distinct().joinToString("、")
     val isCurrentAlbum = tracks.any { it.uri == currentUri }
     val isPlaying = isCurrentAlbum && player?.isPlaying == true
