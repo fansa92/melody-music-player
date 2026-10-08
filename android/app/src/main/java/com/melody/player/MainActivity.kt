@@ -35,6 +35,8 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -71,6 +73,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -91,6 +94,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -127,11 +131,18 @@ class MainActivity : ComponentActivity() {
     private val controllerState = mutableStateOf<MediaController?>(null)
     private val playbackRevision = mutableIntStateOf(0)
     private val favoriteKeys = mutableStateOf<Set<String>>(emptySet())
+    private val lyricsByTrack = mutableStateOf<Map<String, String>>(emptyMap())
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var playerListener: Player.Listener? = null
+    private var lyricsTargetTrackUri: String? = null
 
     private val audioPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (!uris.isNullOrEmpty()) importUris(uris)
+    }
+    private val lyricsPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val targetTrackUri = lyricsTargetTrackUri
+        lyricsTargetTrackUri = null
+        if (uri != null && targetTrackUri != null) importLyrics(uri, targetTrackUri)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -145,9 +156,11 @@ class MainActivity : ComponentActivity() {
                 MelodyApp(
                     tracks = library.value,
                     favorites = favoriteKeys.value,
+                    lyricsByTrack = lyricsByTrack.value,
                     player = controllerState.value,
                     playbackRevision = playbackRevision.intValue,
                     onImport = { audioPicker.launch(arrayOf("audio/*")) },
+                    onImportLyrics = ::selectLyricsFor,
                     onPlayTrack = ::playTrack,
                     onPlayAlbum = ::playAlbum,
                     onToggleFavorite = ::toggleFavorite,
@@ -181,18 +194,53 @@ class MainActivity : ComponentActivity() {
 
     private fun restoreLibrary() {
         lifecycleScope.launch {
-            val saved = withContext(Dispatchers.IO) {
-                val values = getSharedPreferences("melody-library", Context.MODE_PRIVATE)
-                    .getStringSet("uris", emptySet()).orEmpty().toList()
-                values.mapNotNull { raw -> runCatching { readTrack(Uri.parse(raw)) }.getOrNull() }
+            val (saved, savedLyrics) = withContext(Dispatchers.IO) {
+                val preferences = getSharedPreferences("melody-library", Context.MODE_PRIVATE)
+                val values = preferences.getStringSet("uris", emptySet()).orEmpty().toList()
+                val tracks = values.mapNotNull { raw -> runCatching { readTrack(Uri.parse(raw)) }.getOrNull() }
+                val lyrics = tracks.mapNotNull { track ->
+                    val lyricsUri = preferences.getString(lyricsUriKey(track.uri.toString()), null)
+                        ?: return@mapNotNull null
+                    val text = runCatching {
+                        contentResolver.openInputStream(Uri.parse(lyricsUri))
+                            ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                    }.getOrNull()
+                    text?.takeIf { it.isNotBlank() }?.let { track.uri.toString() to it }
+                }.toMap()
+                tracks to lyrics
             }
             library.value = saved
+            lyricsByTrack.value = savedLyrics
             val controller = controllerState.value
             if (controller != null && controller.mediaItemCount == 0 && saved.isNotEmpty()) {
                 controller.setMediaItems(saved.map(::toMediaItem))
             }
         }
     }
+
+    private fun selectLyricsFor(track: MusicTrack) {
+        lyricsTargetTrackUri = track.uri.toString()
+        lyricsPicker.launch(arrayOf("text/plain", "application/octet-stream"))
+    }
+
+    private fun importLyrics(uri: Uri, trackUri: String) {
+        runCatching {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        lifecycleScope.launch {
+            val text = withContext(Dispatchers.IO) {
+                runCatching {
+                    contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                }.getOrNull()
+            } ?: return@launch
+            if (text.isBlank()) return@launch
+            lyricsByTrack.value = lyricsByTrack.value + (trackUri to text)
+            getSharedPreferences("melody-library", Context.MODE_PRIVATE).edit()
+                .putString(lyricsUriKey(trackUri), uri.toString()).apply()
+        }
+    }
+
+    private fun lyricsUriKey(trackUri: String): String = "lyrics-uri:$trackUri"
 
     private fun importUris(uris: List<Uri>) {
         lifecycleScope.launch {
@@ -291,9 +339,11 @@ class MainActivity : ComponentActivity() {
 private fun MelodyApp(
     tracks: List<MusicTrack>,
     favorites: Set<String>,
+    lyricsByTrack: Map<String, String>,
     player: Player?,
     playbackRevision: Int,
     onImport: () -> Unit,
+    onImportLyrics: (MusicTrack) -> Unit,
     onPlayTrack: (MusicTrack) -> Unit,
     onPlayAlbum: (List<MusicTrack>, Int) -> Unit,
     onToggleFavorite: (MusicTrack) -> Unit,
@@ -368,10 +418,12 @@ private fun MelodyApp(
         if (expandedPlayer && currentTrack != null) {
             FullPlayer(
                 track = currentTrack,
+                lyrics = lyricsByTrack[currentTrack.uri.toString()],
                 player = player,
                 revision = playbackRevision,
                 modifier = Modifier.padding(innerPadding),
-                onFavorite = { onToggleFavorite(currentTrack) }
+                onFavorite = { onToggleFavorite(currentTrack) },
+                onImportLyrics = { onImportLyrics(currentTrack) }
             )
         } else if (selectedAlbumName != null && selectedAlbumTracks.isNotEmpty()) {
             AlbumDetails(
@@ -694,34 +746,100 @@ private fun MiniPlayer(track: MusicTrack, player: Player?, revision: Int, onTogg
                 Text(track.artist, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = .72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             IconButton(onClick = { player?.seekToPreviousMediaItem() }) { Icon(Icons.Default.SkipPrevious, contentDescription = "上一首", tint = MaterialTheme.colorScheme.inverseOnSurface) }
-            FilledTonalIconButton(onClick = onToggle) { Icon(if (player?.isPlaying == true) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (player?.isPlaying == true) "暂停" else "播放") }
+            FilledIconButton(onClick = onToggle, modifier = Modifier.size(44.dp)) { Icon(if (player?.isPlaying == true) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (player?.isPlaying == true) "暂停" else "继续播放") }
             IconButton(onClick = { player?.seekToNextMediaItem() }) { Icon(Icons.Default.SkipNext, contentDescription = "下一首", tint = MaterialTheme.colorScheme.inverseOnSurface) }
         }
     }
 }
 
 @Composable
-private fun FullPlayer(track: MusicTrack, player: Player?, revision: Int, modifier: Modifier = Modifier, onFavorite: () -> Unit) {
+private fun LyricsPanel(lyrics: String?, position: Long, onImport: () -> Unit, modifier: Modifier = Modifier) {
+    val lines = remember(lyrics) { parseLyricLines(lyrics.orEmpty()) }
+    val activeLine = lines.indexOfLast { line -> line.timeMs?.let { it <= position } == true }
+    val listState = rememberLazyListState()
+    LaunchedEffect(activeLine, lines.size) {
+        if (activeLine >= 0) listState.animateScrollToItem(activeLine)
+    }
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("歌词", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                TextButton(onClick = onImport) { Text(if (lyrics.isNullOrBlank()) "导入 LRC" else "更换歌词") }
+            }
+            if (lines.isEmpty()) {
+                Column(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("还没有歌词", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("选择与这首歌对应的 .lrc 文件", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = PaddingValues(vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    itemsIndexed(lines) { index, line ->
+                        Text(
+                            line.text,
+                            modifier = Modifier.fillMaxWidth(),
+                            color = if (index == activeLine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (index == activeLine) FontWeight.Bold else FontWeight.Normal,
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FullPlayer(
+    track: MusicTrack,
+    lyrics: String?,
+    player: Player?,
+    revision: Int,
+    modifier: Modifier = Modifier,
+    onFavorite: () -> Unit,
+    onImportLyrics: () -> Unit
+) {
     var position by remember { mutableStateOf(0L) }
+    val queueCount = player?.mediaItemCount ?: 0
+    val queuePosition = player?.currentMediaItemIndex?.takeIf { it >= 0 }?.plus(1) ?: 0
     LaunchedEffect(player, revision) {
         while (true) {
             position = player?.currentPosition ?: 0L
             delay(500)
         }
     }
-    Column(modifier.fillMaxSize().padding(horizontal = 23.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Artwork(track, Modifier.size(270.dp), circular = true)
-        Spacer(Modifier.height(25.dp))
+    Column(modifier.fillMaxSize().padding(horizontal = 23.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Artwork(track, Modifier.size(210.dp), circular = true)
+        Spacer(Modifier.height(8.dp))
         Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(track.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(track.album, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-        Spacer(Modifier.height(22.dp))
+        Text(
+            if (queueCount > 0) "第 $queuePosition 首 · 共 $queueCount 首" else "队列中暂无歌曲",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(Modifier.height(6.dp))
         Slider(value = if (track.durationMs > 0) position.toFloat().coerceIn(0f, track.durationMs.toFloat()) / track.durationMs else 0f, onValueChange = { player?.seekTo((it * track.durationMs).toLong()) })
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(formatDuration(position), style = MaterialTheme.typography.labelSmall)
             Text(formatDuration(track.durationMs), style = MaterialTheme.typography.labelSmall)
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(2.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(15.dp)) {
             IconButton(onClick = { player?.shuffleModeEnabled = !(player?.shuffleModeEnabled ?: false) }) { Icon(Icons.Default.Shuffle, contentDescription = "随机播放") }
             IconButton(onClick = { player?.seekToPreviousMediaItem() }) { Icon(Icons.Default.SkipPrevious, contentDescription = "上一首", modifier = Modifier.size(34.dp)) }
@@ -734,8 +852,16 @@ private fun FullPlayer(track: MusicTrack, player: Player?, revision: Int, modifi
                 player?.repeatMode = when (current) { Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL; Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF }
             }) { Icon(Icons.Default.QueueMusic, contentDescription = "循环模式") }
         }
-        Spacer(Modifier.height(12.dp))
-        FilledTonalIconButton(onClick = onFavorite) { Icon(Icons.Default.FavoriteBorder, contentDescription = "收藏") }
+        Spacer(Modifier.height(6.dp))
+        LyricsPanel(
+            lyrics = lyrics,
+            position = position,
+            onImport = onImportLyrics,
+            modifier = Modifier.weight(1f).fillMaxWidth()
+        )
+        FilledTonalIconButton(onClick = onFavorite, modifier = Modifier.padding(top = 4.dp)) {
+            Icon(Icons.Default.FavoriteBorder, contentDescription = "收藏")
+        }
     }
 }
 
@@ -743,4 +869,32 @@ private fun formatDuration(milliseconds: Long): String {
     if (milliseconds <= 0L) return "--:--"
     val seconds = milliseconds / 1000
     return "%02d:%02d".format(seconds / 60, seconds % 60)
+}
+
+private data class LyricLine(val timeMs: Long?, val text: String)
+
+private val lrcTimestampPattern = Regex("""\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]""")
+private val lrcMetadataPattern = Regex("""^\[(?:ti|ar|al|by|re|ve|offset|length|kana|au|la|tool):.*\]$""", RegexOption.IGNORE_CASE)
+
+private fun parseLyricLines(rawLyrics: String): List<LyricLine> {
+    val result = mutableListOf<LyricLine>()
+    rawLyrics.lineSequence().forEach { sourceLine ->
+        val timestamps = lrcTimestampPattern.findAll(sourceLine).toList()
+        val text = lrcTimestampPattern.replace(sourceLine, "").trim()
+        if (text.isBlank() || (timestamps.isEmpty() && lrcMetadataPattern.matches(sourceLine.trim()))) return@forEach
+        if (timestamps.isEmpty()) {
+            result += LyricLine(null, text)
+        } else {
+            timestamps.forEach { match ->
+                val minutes = match.groupValues[1].toLongOrNull() ?: 0L
+                val seconds = match.groupValues[2].toLongOrNull() ?: 0L
+                val milliseconds = match.groupValues[3].takeIf { it.isNotEmpty() }
+                    ?.padEnd(3, '0')?.take(3)?.toLongOrNull() ?: 0L
+                result += LyricLine((minutes * 60 + seconds) * 1000 + milliseconds, text)
+            }
+        }
+    }
+    return result.withIndex()
+        .sortedWith(compareBy<IndexedValue<LyricLine>> { it.value.timeMs ?: Long.MAX_VALUE }.thenBy { it.index })
+        .map { it.value }
 }
