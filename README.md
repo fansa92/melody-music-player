@@ -17,6 +17,14 @@ cd android
 
 Gradle 项目配置检查已通过，但本次没有生成 APK：当前执行环境未安装 Android SDK，APK 构建停在 `SDK location not found`。在安装 SDK Platform 36 的 Android Studio 环境中打开 `android/` 并同步后即可继续构建；成功后的 APK 预期位于 `android/app/build/outputs/apk/debug/`。
 
+### GitHub Actions 自动编译与发布
+
+仓库的 **Android Build and Release** 工作流会在推送到 `main`、向 `main` 提交 Pull Request，以及推送 `v*` 版本标签时运行。每次运行都会生成可下载的 `app-debug.apk` 构建产物，可在对应的 GitHub Actions 运行记录页面获取，保留 14 天。
+
+也可以在仓库的 **Actions → Android Build and Release → Run workflow** 中手动编译。`release_tag` 留空时只生成构建产物；填写如 `v1.0.0` 的版本标签时，会在编译完成后创建或更新对应的 GitHub Release，并附上 APK。推送 `v1.0.0` 这类标签也会自动发布 Release。
+
+当前工作流产出的是 Android `debug` 变体 APK，使用 Actions 运行器生成的临时调试签名，适合测试安装；不同运行生成的签名可能不同，不适合作为长期升级或正式商店发布的签名。正式分发前应配置并保护稳定的发布签名密钥。
+
 ## 浏览器预览
 
 根目录的 `index.html` 是便于快速体验的 PWA 预览，使用浏览器原生音频 API 与 IndexedDB，**不加载 Media3**；Media3 仅用于上述 Android 原生工程。通过 HTTPS 打开后可添加到主屏幕。页面静态资源支持离线缓存，导入音频与曲库保存在当前浏览器本地，不会上传。
